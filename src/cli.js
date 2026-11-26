@@ -549,7 +549,7 @@ async function messagesCommand(args) {
   const { baseUrl, health, foreign } = await findRunningServer(port);
   if (foreign) throw otherInstallationError(port, foreign);
 
-  if (health?.app === "lavish-axi") {
+  if (health?.app === "lavish-axi" && health.supports_messages === true) {
     const output = await fetchJson(`${baseUrl}/api/${key}/messages?${query}`);
     if (!output.missing) return output;
   } else {

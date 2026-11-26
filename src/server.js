@@ -785,6 +785,7 @@ export async function serve({
       app: "lavish-axi",
       version,
       state_id: serverStateId,
+      supports_messages: true,
       process_id: serverProcessId,
       state_dir: path.dirname(stateFile),
       // Where this process is listening and every address it was asked to serve (bound or still
