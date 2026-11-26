@@ -88,10 +88,10 @@ test("messages reads owned pre-endpoint daemon history but preserves supported e
     assert.match(error.stdout, /NOT_FOUND/);
     return true;
   });
-  assert.ok(requests.some((request) => request.startsWith(`GET /api/${key}/messages?`)));
-  assert.ok(
-    requests.every((request) => request === "GET /health" || request.startsWith(`GET /api/${key}/messages?`)),
-  );
+  const isMessagesRequest = (request) =>
+    request.startsWith("GET ") && new URL(request.slice(4), "http://localhost").pathname === `/api/${key}/messages`;
+  assert.ok(requests.some(isMessagesRequest));
+  assert.ok(requests.every((request) => request === "GET /health" || isMessagesRequest(request)));
   assert.equal(await readFile(stateFile, "utf8"), state);
 });
 
