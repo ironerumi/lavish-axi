@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   boundStoredChat,
   chatEntryForPrompt,
+  createMessagesOutput,
   collectChatAckIds,
   markPreReceipt,
   MAX_CHAT_STORED_BYTES,
@@ -17,6 +18,59 @@ import {
   storedChatBytes,
   unstampDelivery,
 } from "../src/chat-messages.js";
+
+const transcript = {
+  status: "ended",
+  delivery_seq: 3,
+  chat: [
+    { role: "user", text: "legacy", receipt: "none" },
+    { role: "user", text: "done", delivered_seq: 1, delivered_at: "d", working_at: "w", done_at: "r" },
+    { role: "user", text: "working", delivered_seq: 2, delivered_at: "d", working_at: "w" },
+    { role: "agent", text: "**reply**", html: "<b>reply</b>" },
+    { role: "user", text: "seen", delivered_seq: 3, delivered_at: "d" },
+    { role: "user", text: "unseen" },
+  ],
+};
+
+function conversation(options = {}, session = transcript) {
+  return createMessagesOutput("/tmp/board.html", session, options);
+}
+
+function texts(output) {
+  return output.messages.map((message) => message.text);
+}
+
+test("messages derive mutually exclusive receipt states without rendering agent replies", () => {
+  const output = conversation();
+  assert.deepEqual(
+    output.messages.map((message) => message.state),
+    ["pre-receipt", "done", "working", undefined, "seen", "unseen"],
+  );
+  assert.equal(output.messages[3].text, "**reply**");
+  assert.ok(!Object.hasOwn(output.messages[3], "html"));
+  for (const status of ["unseen", "seen", "working", "done"]) {
+    assert.deepEqual(texts(conversation({ status })), [status]);
+  }
+  assert.deepEqual(texts(conversation({ status: "unanswered" })), ["working", "seen", "unseen"]);
+  assert.deepEqual(texts(conversation({ role: "agent" })), ["**reply**"]);
+});
+
+test("messages scopes the latest batch before filters and counts only matches omitted by the limit", () => {
+  assert.deepEqual(texts(conversation({ latest: true })), ["unseen"]);
+  assert.deepEqual(texts(conversation({ latest: true, status: "seen" })), []);
+  assert.deepEqual(texts(conversation({ latest: true }, { ...transcript, chat: transcript.chat.slice(0, -1) })), [
+    "seen",
+  ]);
+  assert.deepEqual(texts(conversation({ sinceSeq: 3 })), ["unseen"]);
+  const limited = conversation({ sinceSeq: 1, limit: 2 });
+  assert.deepEqual(texts(limited), ["seen", "unseen"]);
+  assert.equal(limited.more_messages, 1);
+  assert.equal(limited.session.total_messages, 6);
+  assert.equal(conversation({ limit: 0 }).more_messages, 0);
+  const long = conversation({}, { ...transcript, chat: Array(21).fill(transcript.chat[5]) });
+  assert.equal(long.messages.length, 20);
+  assert.equal(long.more_messages, 1);
+});
 
 // The renderer is what turns an agent's `--agent-reply` into something a reviewer can scan in a
 // 360px column. It is a deliberate subset: every rule below is one the reply needs, and anything

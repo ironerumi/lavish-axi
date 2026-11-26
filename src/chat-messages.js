@@ -498,6 +498,108 @@ export function serializeChat(chat) {
   return serialized;
 }
 
+const MESSAGE_STATUSES = ["all", "unseen", "seen", "working", "done", "unanswered"];
+const MESSAGE_ROLES = ["all", "user", "agent"];
+export const DEFAULT_MESSAGE_LIMIT = 20;
+
+// Shared by the CLI and the live read endpoint, so offline and live filters agree.
+export function parseMessageFilters(query) {
+  function choice(name, choices) {
+    const value = query.get(name);
+    if (value !== null && !choices.includes(value)) {
+      throw new RangeError(`--${name} must be one of: ${choices.join(", ")}`);
+    }
+    return value ?? undefined;
+  }
+
+  function integer(name) {
+    const value = query.get(name);
+    if (value === null) return undefined;
+    const number = Number(value);
+    if (!/^\d+$/.test(value) || !Number.isSafeInteger(number)) {
+      throw new RangeError(`--${name} requires a non-negative integer`);
+    }
+    return number;
+  }
+
+  return {
+    status: choice("status", MESSAGE_STATUSES),
+    role: choice("role", MESSAGE_ROLES),
+    latest: query.get("latest") === "1",
+    sinceSeq: integer("since-seq"),
+    limit: integer("limit"),
+  };
+}
+
+function chatEntryReceiptState(entry) {
+  if (entry.role !== "user") return undefined;
+  if (entry.receipt === RECEIPT_NONE) return "pre-receipt";
+  if (entry.done_at) return "done";
+  if (entry.working_at) return "working";
+  return entry.delivered_at ? "seen" : "unseen";
+}
+
+/** @param {{ status?: string, role?: string, latest?: boolean, sinceSeq?: number, limit?: number }} [filters] */
+export function createMessagesOutput(file, session, filters = {}) {
+  const { status, latest = false, sinceSeq, limit = DEFAULT_MESSAGE_LIMIT } = filters;
+  const role = filters.role ?? (status !== undefined || latest || sinceSeq !== undefined ? "user" : "all");
+  const chat = Array.isArray(session.chat) ? session.chat : [];
+  const deliverySeq = session.delivery_seq || 0;
+  // Batch selection is independent of filters: a pending batch never silently falls
+  // back to an older delivered batch just because its entries didn't match.
+  const hasUnseen = latest && chat.some((entry) => entry && chatEntryReceiptState(entry) === "unseen");
+  const matches = chat.filter((entry) => {
+    if (!entry || (entry.role !== "user" && entry.role !== "agent")) return false;
+    if (role !== "all" && entry.role !== role) return false;
+    const state = chatEntryReceiptState(entry);
+    if (latest || sinceSeq !== undefined) {
+      if (!state || state === "pre-receipt") return false;
+      if (latest && (hasUnseen ? state !== "unseen" : entry.delivered_seq !== deliverySeq)) return false;
+      if (sinceSeq !== undefined && !(state === "unseen" || entry.delivered_seq > sinceSeq)) return false;
+    }
+    if (!status || status === "all") return true;
+    if (status === "unanswered") return state === "unseen" || state === "seen" || state === "working";
+    return state === status;
+  });
+  const selected = limit === 0 ? matches : matches.slice(-limit);
+  return {
+    session: {
+      file,
+      status: session.status,
+      delivery_seq: deliverySeq,
+      pending_prompts: session.pending_prompts || 0,
+      total_messages: chat.length,
+    },
+    filter: {
+      status: status ?? "all",
+      role,
+      latest,
+      ...(sinceSeq !== undefined ? { since_seq: sinceSeq } : {}),
+      limit,
+    },
+    messages: selected.map((entry) => {
+      const { delivered_seq, role, kind, at, delivered_at, working_at, done_at, anchor, attachments, prompt_id, text } =
+        entry;
+      const state = chatEntryReceiptState(entry);
+      return {
+        ...(delivered_seq !== undefined ? { seq: delivered_seq } : {}),
+        role,
+        kind: kind || "message",
+        ...(state ? { state } : {}),
+        ...(at !== undefined ? { at } : {}),
+        ...(delivered_at !== undefined ? { delivered_at } : {}),
+        ...(working_at !== undefined ? { working_at } : {}),
+        ...(done_at !== undefined ? { done_at } : {}),
+        ...(anchor !== undefined ? { anchor } : {}),
+        ...(attachments !== undefined ? { attachments } : {}),
+        ...(prompt_id !== undefined ? { prompt_id } : {}),
+        text: String(text ?? ""),
+      };
+    }),
+    more_messages: matches.length - selected.length,
+  };
+}
+
 export function storedChatBytes(chat) {
   return Buffer.byteLength(JSON.stringify(Array.isArray(chat) ? chat : []), "utf8");
 }
