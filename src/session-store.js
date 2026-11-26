@@ -105,9 +105,9 @@ export class SessionStore {
     });
   }
 
-  async findByKey(key) {
+  async findByKey(key, { readOnly = false } = {}) {
     return this.runExclusive(async () => {
-      const state = await this.readState();
+      const state = await this.readState({ persistMigrations: !readOnly });
       return state.sessions[key] || null;
     });
   }
@@ -782,7 +782,7 @@ export class SessionStore {
     return referenced;
   }
 
-  async readState() {
+  async readState({ persistMigrations = true } = {}) {
     try {
       const raw = await readFile(this.file, "utf8");
       const parsed = JSON.parse(raw);
@@ -792,8 +792,9 @@ export class SessionStore {
         if (!session || typeof session !== "object") continue;
         // A session the receipt code has never written has no `delivery_seq` key at all. Its user
         // entries predate receipts, so they are marked out of the stamping rule once, here, on the
-        // one load path every operation shares (docs/delivery-acks.md). Persisted at once: the
-        // marker must exist before the first take, which may run without any upsert.
+        // one load path every operation shares (docs/delivery-acks.md). Persist it for ordinary
+        // reads: the first take may run without any upsert. Transcript inspection only needs
+        // the normalized in-memory view and must never write it back.
         if (!("delivery_seq" in session)) {
           session.delivery_seq = 0;
           markPreReceipt(session.chat);
@@ -803,7 +804,7 @@ export class SessionStore {
         session.chat_revision = normalizeRevision(session.chat_revision) + 1;
         changed = true;
       }
-      if (changed) await this.writeState(state);
+      if (changed && persistMigrations) await this.writeState(state);
       return state;
     } catch (error) {
       if (error && error.code === "ENOENT") {

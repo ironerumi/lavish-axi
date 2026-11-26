@@ -55,7 +55,13 @@ import {
   splitExportWarnings,
 } from "./export-bundle.js";
 import { hostRejectedShareWrite, publishedDespiteError, publishToHtmlApp } from "./html-app.js";
-import { serializeChat, serializeChatAckIds, serializeChatSync } from "./chat-messages.js";
+import {
+  createMessagesOutput,
+  parseMessageFilters,
+  serializeChat,
+  serializeChatAckIds,
+  serializeChatSync,
+} from "./chat-messages.js";
 import { formatServerLogLine, serverStdioIsTimestamped } from "./server-log.js";
 import { injectLavishSdk } from "./html-transform.js";
 import {
@@ -1137,6 +1143,31 @@ export async function serve({
   };
   app.get("/api/poll", handlePoll);
   app.post("/api/poll", handlePoll);
+
+  app.get("/api/:key/messages", async (req, res, next) => {
+    res.set("Cache-Control", "no-store");
+    if (hasPresentOriginOrReferer(req) && !isSameOriginRequest(req, allowedHostnames, allowAnyHostname)) {
+      res.sendStatus(403);
+      return;
+    }
+    if (!/^[a-f0-9]{16}$/.test(req.params.key)) {
+      res.sendStatus(404);
+      return;
+    }
+    let filters;
+    try {
+      filters = parseMessageFilters(new URL(req.originalUrl, "http://localhost").searchParams);
+    } catch (error) {
+      res.status(400).json({ error: error.message, code: "VALIDATION_ERROR" });
+      return;
+    }
+    try {
+      const session = await store.findByKey(req.params.key, { readOnly: true });
+      res.json(session ? createMessagesOutput(session.file, session, filters) : { missing: true });
+    } catch (error) {
+      next(error);
+    }
+  });
 
   // The one route that puts words in the reviewer's mouth: whatever lands here
   // reaches the agent as the user's own instructions. The session key is derived
