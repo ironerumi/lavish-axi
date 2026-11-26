@@ -101,9 +101,12 @@ in README say that a reply marks every request delivered to you as Done.
 The positional rule is only true for sessions the receipt code has written from the start. An
 existing `state.json` holds sessions whose user entries no take ever stamped; read naively, the
 first poll after an upgrade would mark months-old notes Seen today and the next reply would mark
-them Done. The [receipt migration invariant](invariants.md#request-flow) defines how `readState` distinguishes
-these legacy entries, including non-persisting transcript inspection. They render no receipt row:
-nothing was observed about them, and an empty row would read as "never seen".
+them Done. `readState`, the one load path every operation shares, therefore marks every user entry
+of a session that has no `delivery_seq` key at all as `receipt: "none"`. Ordinary reads persist that
+migration at once, before any take can run; read-only `messages` inspection normalizes it only in
+memory (`persistMigrations: false`), without writing state. Every receipt stamp helper skips these
+entries, and the UI renders no receipt row: nothing was observed about them, and an empty row would
+read as "never seen".
 
 ## Open issues for Igor
 
